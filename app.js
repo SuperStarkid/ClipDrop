@@ -26,6 +26,7 @@ const icons = {
   expand: '<path d="M4 9V4h5m6 0h5v5m0 6v5h-5m-6 0H4v-5"/>',
   collapse: '<path d="M9 4v5H4m16 0h-5V4m0 16v-5h5m-16 0h5v5"/>',
   close: '<path d="m6 6 12 12M18 6 6 18"/>',
+  trash: '<path d="M3 6h18m-2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m-6 5v6m4-6v6"/>',
 };
 
 function icon(element, name) {
@@ -63,6 +64,15 @@ let nextPage;
 let posts = [];
 let files = { images: [], files: [] };
 let toastTimeout;
+const deletedPostIds = new Set();
+
+async function deletePost(target, item) {
+  deletedPostIds.add(item.id);
+  posts = posts.filter(p => p.id !== item.id);
+  renderFeed();
+  const path = feedPath(target, item);
+  await api(path, { method: "DELETE", headers: roomHeaders(target) });
+}
 
 function node(tag, value, className) {
   const element = document.createElement(tag);
@@ -264,6 +274,7 @@ function showRoom(entry) {
   if (different) {
     postForm.reset();
     files = { images: [], files: [] };
+    deletedPostIds.clear();
     updateComposer();
     message(byId("post-message"));
   }
@@ -286,6 +297,7 @@ function setHome() {
   room = null;
   posts = [];
   nextPage = null;
+  deletedPostIds.clear();
   byId("posts").replaceChildren();
   byId("detail-body").replaceChildren();
   postForm.reset();
@@ -644,6 +656,24 @@ function postCard(item) {
   meta.append(node("span", labels[item.kind]), stamp);
   if (item.expiresAt) meta.append(node("small", item.own ? "Awaiting recipient" : "One-time access"));
   if (item.count > 1) meta.append(node("small", item.count + " attachments"));
+
+  const deleteBtn = action("", async event => {
+    event.stopPropagation();
+    event.preventDefault();
+    const typeLabel = item.kind === "files" ? "file" : item.kind === "images" ? "image" : "post";
+    if (!confirm(`Delete this ${typeLabel}?`)) return;
+    try {
+      await deletePost(entry, item);
+      notify("Deleted.");
+    } catch (error) {
+      notify(error.message || "Could not delete.");
+    }
+  }, "icon-button delete-post-btn");
+  deleteBtn.setAttribute("aria-label", "Delete " + item.summary);
+  deleteBtn.title = "Delete " + (item.kind === "files" ? "file" : "post");
+  icon(deleteBtn, "trash");
+  meta.append(deleteBtn);
+
   group.append(meta, node("p", item.summary));
   button.append(group);
   if (item.kind === "images" && !item.expiresAt) {
@@ -657,7 +687,7 @@ function postCard(item) {
 }
 
 function renderFeed() {
-  posts = posts.filter(post => !post.expiresAt || post.expiresAt > Date.now());
+  posts = posts.filter(post => (!post.expiresAt || post.expiresAt > Date.now()) && !deletedPostIds.has(post.id) && !post.summary?.startsWith("__CLIPDROP_DELETE__:"));
   const container = byId("posts");
   const existing = new Map([...container.children].map(child => [child.dataset.id, child]));
   const visible = new Set(posts.map(post => post.id));
@@ -690,6 +720,14 @@ async function loadFeed({ older = false, quiet = false } = {}) {
   try {
     const page = await (await roomRequest(target, "posts?" + params, { signal: request.signal })).json();
     if (request.signal.aborted || room !== target || activeFilter !== filter) return;
+
+    for (const p of page.posts) {
+      if (p.summary && p.summary.startsWith("__CLIPDROP_DELETE__:")) {
+        deletedPostIds.add(p.summary.slice("__CLIPDROP_DELETE__:".length).trim());
+      }
+    }
+    page.posts = page.posts.filter(p => !p.summary?.startsWith("__CLIPDROP_DELETE__:") && !deletedPostIds.has(p.id));
+
     if (older) {
       const known = new Set(posts.map(item => item.id));
       posts.push(...page.posts.filter(item => !known.has(item.id)));
@@ -835,7 +873,19 @@ function addTextTools(body, value, detectPayload) {
 
 function renderClaim(entry, item, container) {
   container.replaceChildren(node("p", item.own ? "This post is waiting for a recipient." : "Opening it removes the post for everyone."));
-  if (item.own) return;
+  if (item.own) {
+    container.append(action("Delete post", async () => {
+      if (!confirm("Delete this sensitive post?")) return;
+      try {
+        await deletePost(entry, item);
+        postDialog.close();
+        notify("Deleted.");
+      } catch (error) {
+        notify(error.message || "Could not delete.");
+      }
+    }, "button destructive"));
+    return;
+  }
   const button = action(item.count ? "Download and burn" : "Open and burn", async () => {
     button.disabled = true;
     try {
@@ -892,6 +942,25 @@ async function openPost(entry, item) {
       link.rel = "noopener noreferrer";
       body.append(link);
     } else fileList(body, post.attachments, path, post.kind === "images");
+
+    const actions = node("div", undefined, "dialog-actions");
+    const deleteBtn = action("Delete " + (item.kind === "files" ? "file" : item.kind === "images" ? "image" : "post"), async () => {
+      const typeLabel = item.kind === "files" ? "file" : item.kind === "images" ? "image" : "post";
+      if (!confirm(`Are you sure you want to delete this ${typeLabel}?`)) return;
+      deleteBtn.disabled = true;
+      deleteBtn.textContent = "Deleting…";
+      try {
+        await deletePost(entry, item);
+        postDialog.close();
+        notify("Deleted successfully.");
+      } catch (error) {
+        notify(error.message || "Could not delete.");
+        deleteBtn.disabled = false;
+        deleteBtn.textContent = "Delete " + typeLabel;
+      }
+    }, "button destructive");
+    actions.append(deleteBtn);
+    body.append(actions);
   } catch (error) {
     if (!controller.signal.aborted) body.replaceChildren(node("p", error.message, "message"));
   }
@@ -914,6 +983,27 @@ function renderOldClip(clip) {
   byId("old-title").focus({ preventScroll: true });
   window.scrollTo(0, 0);
 }
+
+byId("clear-room")?.addEventListener("click", async () => {
+  if (!room) return;
+  if (!confirm("Clear all posts in this room? This cannot be undone.")) return;
+  const btn = byId("clear-room");
+  btn.disabled = true;
+  try {
+    const res = await roomRequest(room, "reset", { method: "POST" });
+    const data = await res.json();
+    if (data.generation) room.generation = data.generation;
+    posts = [];
+    nextPage = null;
+    deletedPostIds.clear();
+    renderFeed();
+    notify("Room cleared.");
+  } catch (err) {
+    notify(err.message || "Could not clear room.");
+  } finally {
+    btn.disabled = false;
+  }
+});
 
 updateComposer();
 route();
