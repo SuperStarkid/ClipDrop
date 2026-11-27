@@ -539,9 +539,9 @@ function addFiles(incoming) {
   if (!files[kind] || byId("post-button").disabled) return;
   const next = [...files[kind], ...incoming];
   const totalBytes = next.reduce((size, file) => size + file.size, 0);
-  if (totalBytes > 100_000_000) {
+  if (totalBytes > 500_000_000) {
     const totalMb = (totalBytes / (1024 * 1024)).toFixed(1);
-    message(status, `Total size exceeds the 100 MB limit (${totalMb} MB). Please keep total under 100 MB.`);
+    message(status, `Total size exceeds the 500 MB limit (${totalMb} MB). Please keep total under 500 MB.`);
     return;
   }
   if (kind === "images" && next.some(file => !imageType.test(file.type))) {
@@ -576,10 +576,10 @@ async function addFolder(entries) {
   const status = byId("post-message");
   const firstEntry = (entries[0].path || "").replace(/\\+/g, "/");
   const root = firstEntry.split("/")[0] || "folder";
-  message(status, "Compressing folder (up to 100 MB)…");
+  message(status, "Compressing folder (up to 500 MB)…");
   try {
     const { zipFolder } = await import("/tools.js");
-    const archive = await zipFolder(entries, 100_000_000, root + ".zip");
+    const archive = await zipFolder(entries, 500_000_000, root + ".zip");
     if (room !== target) return;
     formats.find(input => input.value === "files").checked = true;
     updateComposer();
