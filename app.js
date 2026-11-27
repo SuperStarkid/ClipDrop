@@ -538,8 +538,10 @@ function addFiles(incoming) {
   const status = byId("post-message");
   if (!files[kind] || byId("post-button").disabled) return;
   const next = [...files[kind], ...incoming];
-  if (next.length > 50 || next.reduce((size, file) => size + file.size, 0) > 100_000_000) {
-    message(status, "Use up to 50 attachments and 100 MB per post.");
+  const totalBytes = next.reduce((size, file) => size + file.size, 0);
+  if (totalBytes > 100_000_000) {
+    const totalMb = (totalBytes / (1024 * 1024)).toFixed(1);
+    message(status, `Total size exceeds the 100 MB limit (${totalMb} MB). Please keep total under 100 MB.`);
     return;
   }
   if (kind === "images" && next.some(file => !imageType.test(file.type))) {
