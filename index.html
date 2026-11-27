@@ -65,7 +65,10 @@
   <div id="room" class="shell room-shell" hidden>
     <div class="room-top">
       <a href="#" class="back-home">All rooms</a>
-      <button type="button" class="button btn-md secondary" id="share-room"><span data-icon="share"></span> Share room</button>
+      <div style="display:flex;gap:var(--space);">
+        <button type="button" class="button btn-md destructive" id="clear-room" title="Clear all posts in this room"><span data-icon="trash"></span> Clear room</button>
+        <button type="button" class="button btn-md secondary" id="share-room"><span data-icon="share"></span> Share room</button>
+      </div>
     </div>
     <section class="room-heading" aria-labelledby="room-title">
       <div><p class="room-kicker"><span></span> Shared room</p><h1 id="room-title" tabindex="-1"></h1><p>Anyone with the code can view and post.</p></div>
