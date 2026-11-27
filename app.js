@@ -538,8 +538,8 @@ function addFiles(incoming) {
   const status = byId("post-message");
   if (!files[kind] || byId("post-button").disabled) return;
   const next = [...files[kind], ...incoming];
-  if (next.length > 8 || next.reduce((size, file) => size + file.size, 0) > 100_000_000) {
-    message(status, "Use up to 8 attachments and 100 MB per post.");
+  if (next.length > 50 || next.reduce((size, file) => size + file.size, 0) > 100_000_000) {
+    message(status, "Use up to 50 attachments and 100 MB per post.");
     return;
   }
   if (kind === "images" && next.some(file => !imageType.test(file.type))) {
@@ -652,16 +652,29 @@ postForm.addEventListener("submit", async event => {
         partBody.append("file", partFile);
         await roomRequest(target, "posts", { method: "POST", body: partBody });
       }
-    } else if (selectedFiles.length > 1 && totalSize > CHUNK_LIMIT) {
-      for (let i = 0; i < selectedFiles.length; i++) {
+    } else if (selectedFiles.length > 7 || totalSize > CHUNK_LIMIT) {
+      const batches = [];
+      let currentBatch = [];
+      let currentBatchSize = 0;
+      for (const file of selectedFiles) {
+        if (currentBatch.length >= 6 || (currentBatchSize + file.size > CHUNK_LIMIT && currentBatch.length > 0)) {
+          batches.push(currentBatch);
+          currentBatch = [];
+          currentBatchSize = 0;
+        }
+        currentBatch.push(file);
+        currentBatchSize += file.size;
+      }
+      if (currentBatch.length > 0) batches.push(currentBatch);
+
+      for (let bi = 0; bi < batches.length; bi++) {
         if (room !== target) return;
-        button.lastChild.textContent = ` Uploading file ${i + 1} of ${selectedFiles.length}…`;
-        const f = selectedFiles[i];
-        const singleBody = new FormData();
-        singleBody.set("kind", kind);
-        singleBody.set("sensitive", String(byId("sensitive").checked));
-        singleBody.append("file", f);
-        await roomRequest(target, "posts", { method: "POST", body: singleBody });
+        button.lastChild.textContent = ` Uploading batch ${bi + 1} of ${batches.length}…`;
+        const batchBody = new FormData();
+        batchBody.set("kind", kind);
+        batchBody.set("sensitive", String(byId("sensitive").checked));
+        for (const f of batches[bi]) batchBody.append("file", f);
+        await roomRequest(target, "posts", { method: "POST", body: batchBody });
       }
     } else {
       const body = new FormData();
