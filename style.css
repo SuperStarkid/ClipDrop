@@ -218,6 +218,8 @@ textarea { display: block; min-height: 128px; resize: vertical; }
   box-shadow: var(--shadow-sticker) var(--ink);
 }
 .post-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px var(--space); font-size: .8rem; }
+.delete-post-btn { margin-left: auto; opacity: 0.65; padding: 2px 6px; min-height: 28px; color: var(--muted); }
+.delete-post-btn:hover { opacity: 1; color: var(--sticker-pink); }
 .post-meta span { color: var(--sticker-ink); background: var(--sticker-lime); border: var(--outline-width) solid var(--sticker-ink); border-radius: var(--radius-pill); padding: 2px var(--space); }
 .post-card p { min-width: 0; margin-top: var(--space); overflow-wrap: anywhere; white-space: pre-line; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; font-size: .875rem; font-weight: 500; }
 .post-card img { width: 64px; height: 56px; object-fit: cover; border: var(--outline); border-radius: var(--radius-sticker); }
