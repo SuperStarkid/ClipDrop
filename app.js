@@ -68,7 +68,17 @@ const deletedPostIds = new Set();
 
 async function deletePost(target, item) {
   deletedPostIds.add(item.id);
-  posts = posts.filter(p => p.id !== item.id);
+  const partMatch = item.summary?.match(/^(.*?)\.part\d+$/);
+  if (partMatch) {
+    const baseName = partMatch[1];
+    const siblingParts = posts.filter(p => p.id !== item.id && p.summary?.startsWith(baseName + ".part"));
+    for (const sib of siblingParts) {
+      deletedPostIds.add(sib.id);
+      const sPath = feedPath(target, sib);
+      api(sPath, { method: "DELETE", headers: roomHeaders(target) }).catch(() => {});
+    }
+  }
+  posts = posts.filter(p => !deletedPostIds.has(p.id));
   renderFeed();
   const path = feedPath(target, item);
   await api(path, { method: "DELETE", headers: roomHeaders(target) });
@@ -528,8 +538,8 @@ function addFiles(incoming) {
   const status = byId("post-message");
   if (!files[kind] || byId("post-button").disabled) return;
   const next = [...files[kind], ...incoming];
-  if (next.length > 8 || next.reduce((size, file) => size + file.size, 0) > 10_000_000) {
-    message(status, "Use up to 8 attachments and 10 MB per post.");
+  if (next.length > 8 || next.reduce((size, file) => size + file.size, 0) > 100_000_000) {
+    message(status, "Use up to 8 attachments and 100 MB per post.");
     return;
   }
   if (kind === "images" && next.some(file => !imageType.test(file.type))) {
@@ -562,14 +572,19 @@ async function addFolder(entries) {
   const target = room;
   if (!target || !entries.length) return;
   const status = byId("post-message");
-  const root = entries[0].path.split("/")[0];
-  message(status, "Compressing folder…");
-  const { zipFolder } = await import("/tools.js");
-  const archive = await zipFolder(entries, 10_000_000, root + ".zip");
-  if (room !== target) return;
-  formats.find(input => input.value === "files").checked = true;
-  updateComposer();
-  addFiles([archive]);
+  const firstEntry = (entries[0].path || "").replace(/\\+/g, "/");
+  const root = firstEntry.split("/")[0] || "folder";
+  message(status, "Compressing folder (up to 100 MB)…");
+  try {
+    const { zipFolder } = await import("/tools.js");
+    const archive = await zipFolder(entries, 100_000_000, root + ".zip");
+    if (room !== target) return;
+    formats.find(input => input.value === "files").checked = true;
+    updateComposer();
+    addFiles([archive]);
+  } catch (error) {
+    message(status, error.message);
+  }
 }
 
 byId("pick-folder").addEventListener("click", () => byId("folder-input").click());
@@ -609,19 +624,55 @@ postForm.addEventListener("submit", async event => {
   const target = room;
   const kind = kindSelected();
   const status = byId("post-message");
-  const body = new FormData();
-  body.set("kind", kind);
-  body.set("sensitive", String(byId("sensitive").checked));
-  if (kind === "text") body.set("value", new Blob([postText.value], { type: "text/plain" }), "note.txt");
-  if (kind === "links") body.set("value", byId("post-link").value.trim());
-  for (const file of files[kind] ?? []) body.append("file", file);
+  const selectedFiles = files[kind] ?? [];
   const controls = [...formats, postText, byId("post-link"), fileButton, byId("pick-folder"), byId("sensitive"), ...byId("selected-files").querySelectorAll("button")];
+
   message(status);
   button.disabled = true;
   button.lastChild.textContent = " Posting…";
   controls.forEach(control => { control.disabled = true; });
+
   try {
-    await roomRequest(target, "posts", { method: "POST", body });
+    const CHUNK_LIMIT = 9_000_000;
+    const totalSize = selectedFiles.reduce((sum, f) => sum + f.size, 0);
+
+    if (selectedFiles.length === 1 && selectedFiles[0].size > CHUNK_LIMIT) {
+      const file = selectedFiles[0];
+      const totalParts = Math.ceil(file.size / CHUNK_LIMIT);
+      for (let i = 0; i < totalParts; i++) {
+        if (room !== target) return;
+        button.lastChild.textContent = ` Uploading part ${i + 1} of ${totalParts}…`;
+        const start = i * CHUNK_LIMIT;
+        const end = Math.min(file.size, start + CHUNK_LIMIT);
+        const partBlob = file.slice(start, end);
+        const partFile = new File([partBlob], `${file.name}.part${i + 1}`, { type: file.type });
+        const partBody = new FormData();
+        partBody.set("kind", kind);
+        partBody.set("sensitive", String(byId("sensitive").checked));
+        partBody.append("file", partFile);
+        await roomRequest(target, "posts", { method: "POST", body: partBody });
+      }
+    } else if (selectedFiles.length > 1 && totalSize > CHUNK_LIMIT) {
+      for (let i = 0; i < selectedFiles.length; i++) {
+        if (room !== target) return;
+        button.lastChild.textContent = ` Uploading file ${i + 1} of ${selectedFiles.length}…`;
+        const f = selectedFiles[i];
+        const singleBody = new FormData();
+        singleBody.set("kind", kind);
+        singleBody.set("sensitive", String(byId("sensitive").checked));
+        singleBody.append("file", f);
+        await roomRequest(target, "posts", { method: "POST", body: singleBody });
+      }
+    } else {
+      const body = new FormData();
+      body.set("kind", kind);
+      body.set("sensitive", String(byId("sensitive").checked));
+      if (kind === "text") body.set("value", new Blob([postText.value], { type: "text/plain" }), "note.txt");
+      if (kind === "links") body.set("value", byId("post-link").value.trim());
+      for (const file of selectedFiles) body.append("file", file);
+      await roomRequest(target, "posts", { method: "POST", body });
+    }
+
     if (room !== target) return;
     byId("sensitive").checked = false;
     if (kind === "text") postText.value = "";
@@ -841,7 +892,40 @@ function fileList(parent, attachments, path, largeImages = false) {
       }, "button secondary");
       convertBox.append(select, btn);
     }).catch(() => {});
-    row.append(node("span", file.name), convertBox, download);
+    const partMatch = file.name.match(/^(.*?)\.part(\d+)$/);
+    if (partMatch) {
+      const baseName = partMatch[1];
+      const downloadAll = action("Download complete " + baseName, async () => {
+        downloadAll.disabled = true;
+        const prevText = downloadAll.textContent;
+        try {
+          const related = posts.filter(p => p.summary && p.summary.startsWith(baseName + ".part"));
+          related.sort((a, b) => {
+            const na = parseInt(a.summary.match(/\.part(\d+)/)?.[1] || "0", 10);
+            const nb = parseInt(b.summary.match(/\.part(\d+)/)?.[1] || "0", 10);
+            return na - nb;
+          });
+          const chunks = [];
+          for (let pi = 0; pi < related.length; pi++) {
+            downloadAll.textContent = `Downloading part ${pi + 1}/${related.length}…`;
+            const pPath = feedPath(room, related[pi]) + "/files/0";
+            const pRes = await fetch(pPath);
+            if (!pRes.ok) throw new Error("Could not download part " + (pi + 1));
+            chunks.push(await pRes.blob());
+          }
+          downloadBlob(new Blob(chunks, { type: "application/zip" }), baseName);
+          notify("Downloaded " + baseName);
+        } catch (err) {
+          notify(err.message || "Could not download all parts.");
+        } finally {
+          downloadAll.disabled = false;
+          downloadAll.textContent = prevText;
+        }
+      }, "button primary");
+      row.append(node("span", file.name), downloadAll, convertBox, download);
+    } else {
+      row.append(node("span", file.name), convertBox, download);
+    }
     list.append(row);
   });
   parent.append(list);
